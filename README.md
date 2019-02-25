@@ -4,8 +4,7 @@
 ---
 Requirements
 ----
-- IBM SPSS Statistics Subscription or version 26.
-
+- IBM SPSS Statistics Subscription
 ---
 Installation intructions
 ----
