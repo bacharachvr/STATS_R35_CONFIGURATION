@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.LinkedList;
 
 public class HandlePlugin {
     static void doInstall(String r_home, String extFolderName) throws Exception {
@@ -29,7 +30,7 @@ public class HandlePlugin {
             String srcPath = pluginSrcBasePath + osInfoString + File.separator;
 
             boolean storeToIni = false;
-            if (isStoreToDXIni(rHomePath)) {
+            if (isStoreToDXConfigFile(rHomePath)) {
                 scriptDir = getDXConfigDir();
 
                 if (osInfo == OSInfo.Win64 || osInfo == OSInfo.Win32) {
@@ -77,27 +78,68 @@ public class HandlePlugin {
         String pluginSrcBasePath = getSourcePath(extFolderName);
         String jsonPath = pluginSrcBasePath + ConfigUtil.getIndexFile();
 
-        String dir = m_extensionFolder;
-
         ParseJSON indexJSON = new ParseJSON(jsonPath, HandleType.UNINSTALL);
-        ConfigPreferences pref = new ConfigPreferences(ConfigUtil.getStatisticsVersion());
-        String statsPkg = pref.getRPackageInstallPath();
-        if (!statsPkg.endsWith(File.separator)) {
-            statsPkg += File.separator;
-        }
-        statsPkg += indexJSON.getStatsPkgName();
-        //delete Stats package from R library path.
-        deleteDir(statsPkg);
+
+        String statsPkgName = indexJSON.getStatsPkgName();
+        String rInvokeLibName = indexJSON.getRInvokeLibName();
 
         //Get Invoke Lib name
-        String invokeLibName = ConfigUtil.getInvokeLibName(indexJSON.getRInvokeLibName());
-        //Delete Invoke Lib
-        deleteDir(dir + invokeLibName);
+        String invokeLibName = ConfigUtil.getInvokeLibName(rInvokeLibName);
 
-        //Delete unzip folder
-        deleteDir(pluginSrcBasePath);
+        if (dxConfigFileIsWritable()) {
+            String rHome = getRHomeFromDXConfigFile();
+            changeDXConfigFile(null, null, false);
 
-        pref.removeAllConfigPrefs();
+            if (rHome != null && rHome.length() > 0 ) {
+                if (!rHome.endsWith(File.separator)) {
+                    rHome += File.separator;
+                }
+
+                StringBuilder pkgPath = new StringBuilder(rHome);
+                pkgPath.append("library");
+                pkgPath.append(File.separator);
+                pkgPath.append(statsPkgName);
+
+                deleteDir(pkgPath.toString());
+            }
+
+            String statsPath = ConfigUtil.getStatisticsPath();
+            OSInfo osInfo = ConfigUtil.getOSType();
+            StringBuilder invokeLibPath = new StringBuilder(statsPath);
+            if (!statsPath.endsWith(File.separator)) {
+                invokeLibPath.append(File.separator);
+            }
+
+            if (osInfo != OSInfo.Win64 && osInfo != OSInfo.Win32) {
+                invokeLibPath.append("lib");
+                invokeLibPath.append(File.separator);
+            }
+            invokeLibPath.append(invokeLibName);
+
+            deleteDir(invokeLibPath.toString());
+
+        } else {
+            ConfigPreferences pref = new ConfigPreferences(ConfigUtil.getStatisticsVersion());
+            String statsPkg = pref.getRPackageInstallPath();
+            if (!statsPkg.endsWith(File.separator)) {
+                statsPkg += File.separator;
+            }
+            statsPkg += statsPkgName;
+            //delete Stats package from R library path.
+            deleteDir(statsPkg);
+
+            String extensionFolder = m_extensionFolder;
+            if (!extensionFolder.endsWith(File.separator)) {
+                extensionFolder += File.separator;
+            }
+            //Delete Invoke Lib
+            deleteDir(extensionFolder + invokeLibName);
+
+            //Delete unzip folder
+            deleteDir(pluginSrcBasePath);
+
+            pref.removeAllConfigPrefs();
+        }
     }
 
     enum HandleType {
@@ -285,15 +327,26 @@ public class HandlePlugin {
         return dxIniDir.toString();
     }
 
-    private static boolean isStoreToDXIni(String rHome) throws Exception{
+    private static boolean isStoreToDXConfigFile(String rHome) throws Exception{
         boolean result = false;
-        String dxIniDir = getDXConfigDir();
+
         String rDefaultLibDir = rHome;
         if (!rDefaultLibDir.endsWith(File.separator)) {
             rDefaultLibDir += File.separator;
         }
         rDefaultLibDir += "library";
-        if (ConfigUtil.isWritable(dxIniDir) && ConfigUtil.isWritable(rDefaultLibDir)) {
+        if (dxConfigFileIsWritable() && ConfigUtil.isWritable(rDefaultLibDir)) {
+            result = true;
+        }
+
+        return result;
+    }
+
+    private static boolean dxConfigFileIsWritable() throws Exception {
+        boolean result = false;
+
+        String dxIniDir = getDXConfigDir();
+        if (ConfigUtil.isWritable(dxIniDir)) {
             String dxIniPath = dxIniDir + m_dxConfig;
             if (ConfigUtil.isWritable(dxIniPath)) {
                 result = true;
@@ -303,7 +356,7 @@ public class HandlePlugin {
         return result;
     }
 
-    private static void changeDXConfigFile(String rHome, String libName) throws Exception {
+    private static void changeDXConfigFile(String rHome, String libName, boolean isInstall) throws Exception {
         String dxIniDir = getDXConfigDir();
 
         if (ConfigUtil.isWritable(dxIniDir)) {
@@ -311,9 +364,29 @@ public class HandlePlugin {
 
             if (ConfigUtil.isWritable(dxIniPath)) {
                 IniHandler dxCfgIni = IniHandler.loadIniFile(dxIniPath);
-                dxCfgIni.writePrivateProfileString("R", m_dxHomeKeyName, rHome);
-                dxCfgIni.writePrivateProfileString("R", m_dxLibKeyName, libName);
+                if (isInstall) {
+                    dxCfgIni.writePrivateProfileString("R", m_dxHomeKeyName, rHome);
+                    dxCfgIni.writePrivateProfileString("R", m_dxLibKeyName, libName);
+                } else {
+                    dxCfgIni.writePrivateProfileString("R", null, null);
+                }
             }
+        }
+    }
+
+    private static void changeDXConfigFile(String rHome, String libName) throws Exception {
+        changeDXConfigFile(rHome, libName, true);
+    }
+
+    private static String getRHomeFromDXConfigFile() throws Exception {
+        String dxIniDir = getDXConfigDir();
+        String dxIniPath = dxIniDir + m_dxConfig;
+        IniHandler dxCfgIni = IniHandler.loadIniFile(dxIniPath);
+        LinkedList<String> homeList = dxCfgIni.getPrivateProfileString("R", "HOME");
+        if (homeList != null && homeList.size() > 0) {
+            return homeList.getFirst();
+        } else {
+            return "";
         }
     }
 
